@@ -1,0 +1,6 @@
+node_modules/
+dist/
+models/
+yolov8n.pt
+yolov8n.onnx
+scratch_readme.md

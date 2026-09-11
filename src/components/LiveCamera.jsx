@@ -20,7 +20,8 @@ import {
   HelpCircle,
   XCircle,
   Eye,
-  Sliders
+  Sliders,
+  Info
 } from 'lucide-react';
 import { detectRoadHazards } from '../ai/detectionService';
 import { getCurrentGPSPosition } from '../services/geoService';
@@ -665,14 +666,23 @@ export default function LiveCamera({ onHazardSaved }) {
                 </p>
               </div>
             ) : latestResult?.status === 'CLEAR' ? (
-              <div className="p-4 rounded-xl bg-slate-950 border border-emerald-500/40 text-slate-200 text-xs space-y-1">
-                <span className="font-bold text-emerald-400 flex items-center gap-1.5 font-mono">
-                  <CheckCircle2 className="w-4 h-4" />
-                  SUPPORTED HAZARDS: NONE DETECTED
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs space-y-2">
+                <span className="font-bold text-slate-300 flex items-center gap-1.5 font-mono">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  NO SUPPORTED HAZARD DETECTED
                 </span>
-                <p className="text-slate-300 font-sans">
-                  No trained defects detected in active camera frame.
+                <p className="text-slate-400 font-sans">
+                  No trained defects or road obstacles detected in active camera frame.
                 </p>
+                <div className="text-[10px] text-slate-400 font-mono bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-0.5">
+                  <p className="text-amber-400 font-bold flex items-center gap-1">
+                    <Info className="w-3 h-3" />
+                    Model Scope Notice:
+                  </p>
+                  <p className="text-slate-400 font-sans text-[10px] leading-tight">
+                    Current AI models detect potholes, road cracks, and obstacles. Waterlogging, open manholes and other unsupported hazards require dedicated trained models.
+                  </p>
+                </div>
               </div>
             ) : latestResult?.status === 'UNCERTAIN' ? (
               <div className="p-4 rounded-xl bg-yellow-950/40 border border-yellow-500/50 text-yellow-200 text-xs space-y-1">

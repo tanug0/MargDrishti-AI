@@ -177,36 +177,67 @@ function decodeYoloMulticlassOutput(outputTensor, modelInfo, metadata, confThres
 }
 
 /**
- * Decodes YOLO COCO for Road Obstacles/Debris
+ * Decodes YOLO COCO for Road Obstacles & Debris
+ * Filters out ordinary traffic participants (cars, trucks, buses, motorcycles, bicycles, persons),
+ * normal road infrastructure (traffic lights, stop signs), and tiny household items (which trigger on lane stripes).
+ * Preserves genuine road hazards: dropped luggage/cargo, bulky road debris, and wandering animals on the road.
  */
 function decodeYoloCocoOutput(outputTensor, modelInfo, metadata, confThreshold, nmsThreshold) {
   const allDetections = decodeYoloMulticlassOutput(outputTensor, modelInfo, metadata, confThreshold, nmsThreshold);
   
-  // Filter for genuine road obstacles / hazards
-  const obstacleClasses = new Set([
-    'person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck', 'traffic light',
-    'stop sign', 'cat', 'dog', 'horse', 'sheep', 'cow', 'backpack', 'suitcase',
-    'sports ball', 'bottle', 'chair'
+  // Genuine foreign road debris, dropped cargo/luggage/furniture, and stray/wandering animals on roadway
+  const supportedObstacleClasses = new Set([
+    // Bulky Dropped Cargo, Luggage & Large Debris
+    'backpack', 'suitcase', 'handbag', 'chair', 'couch', 'bench',
+    'sports ball', 'skateboard', 'surfboard', 'umbrella',
+    // Stray & Wandering Animals on Road
+    'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe'
   ]);
 
-  return allDetections
-    .filter(d => obstacleClasses.has(d.type.toLowerCase()))
-    .map(d => ({
-      ...d,
-      type: `Road Obstacle (${d.type})`,
-      hazardClass: 'obstacle'
-    }));
+  const filtered = [];
+
+  for (const d of allDetections) {
+    const rawType = d.type.toLowerCase();
+    const formattedName = rawType.charAt(0).toUpperCase() + rawType.slice(1);
+
+    if (supportedObstacleClasses.has(rawType)) {
+      const relAreaPct = (d.bboxNormalized.width * d.bboxNormalized.height) * 100;
+      
+      // Filter out sub-pixel noise; genuine obstacles on a road have measurable footprint
+      if (d.confidence >= 0.30 && relAreaPct >= 0.3) {
+        filtered.push({
+          ...d,
+          type: `Road Obstacle (${formattedName})`,
+          hazardClass: 'obstacle',
+          cocoClass: rawType
+        });
+      }
+    }
+  }
+
+  return filtered;
 }
 
 /**
- * Non-Maximum Suppression (NMS)
- * Suppresses boxes with IoU > iouThreshold within same class, or cross-model duplicate boxes (> 0.80 IoU)
+ * Non-Maximum Suppression (NMS) & Multi-Model Fusion
+ * Suppresses boxes with IoU > iouThreshold within same class, or cross-model duplicate boxes (> 0.70 IoU)
+ * Preserves specific RDD crack classification over weak generic pothole detections
  */
 export function applyNMS(boxes, iouThreshold = 0.45) {
   if (boxes.length <= 1) return boxes;
 
-  // Sort boxes descending by confidence
-  const sorted = [...boxes].sort((a, b) => b.confidence - a.confidence);
+  // Multi-model damage ranking:
+  // Ensure crack detections from RDD multi-damage model are not overshadowed by weak generic pothole activations
+  const scoredBoxes = boxes.map(b => {
+    let effectiveRank = b.confidence;
+    const isCrack = b.hazardClass.includes('crack');
+    if (isCrack && (b.modelSource === 'rdd' || b.modelSource === 'rddGlobal')) {
+      effectiveRank = Math.max(effectiveRank, b.confidence + 0.05);
+    }
+    return { ...b, _rank: effectiveRank };
+  });
+
+  const sorted = scoredBoxes.sort((a, b) => b._rank - a._rank);
   const selected = [];
   const active = new Array(sorted.length).fill(true);
 
@@ -226,14 +257,23 @@ export function applyNMS(boxes, iouThreshold = 0.45) {
       const iou = calculateIoU(current.bbox, other.bbox);
       const isSameClass = current.hazardClass === other.hazardClass;
 
-      // Suppress if same hazard class and IoU > threshold, OR if different class with near-identical bounding box (> 0.80 IoU)
-      if ((isSameClass && iou > iouThreshold) || (!isSameClass && iou > 0.80)) {
+      // Suppress duplicate detections:
+      // 1. Same hazard class with IoU > iouThreshold
+      // 2. Overlapping bounding box (> 0.40 IoU) between weak pothole (< 0.50) and crack: suppress weaker generic candidate
+      // 3. Different classes with near-identical bounding box (> 0.70 IoU)
+      const isWeakPotholeCrackOverlap = (
+        iou > 0.40 &&
+        ((current.hazardClass.includes('crack') && other.hazardClass === 'pothole' && other.confidence < 0.50) ||
+         (other.hazardClass.includes('crack') && current.hazardClass === 'pothole' && current.confidence < 0.50))
+      );
+
+      if ((isSameClass && iou > iouThreshold) || isWeakPotholeCrackOverlap || (!isSameClass && iou > 0.70)) {
         active[j] = false;
       }
     }
   }
 
-  return selected;
+  return selected.map(({ _rank, ...rest }) => rest);
 }
 
 /**
@@ -268,6 +308,7 @@ export function normalizeHazardClass(className) {
   if (lower.includes('longitudinal')) return 'longitudinal_crack';
   if (lower.includes('transverse') || lower.includes('equal interval')) return 'transverse_crack';
   if (lower.includes('crack')) return 'crack';
+  if (lower.includes('corruption') || lower.includes('degradation')) return 'hazard';
   if (lower.includes('obstacle') || lower.includes('debris')) return 'obstacle';
   if (lower.includes('blur')) return 'marking_blur';
   return 'hazard';

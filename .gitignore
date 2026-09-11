@@ -1,6 +1,9 @@
 node_modules/
 dist/
-models/
+/models/
+!public/models/
 yolov8n.pt
 yolov8n.onnx
+scratch/
 scratch_readme.md
+

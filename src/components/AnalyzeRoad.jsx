@@ -418,9 +418,10 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
                 onChange={(e) => setSelectedModel(e.target.value)}
                 className="bg-transparent text-slate-200 font-semibold focus:outline-none cursor-pointer"
               >
-                <option value="unified" className="bg-slate-900">MargDrishti Unified (Pothole + RDD)</option>
+                <option value="unified" className="bg-slate-900">MargDrishti Unified (Pothole + RDD Global + Obstacle)</option>
                 <option value="pothole" className="bg-slate-900">Pothole Specialist (YOLOv8-End2End)</option>
-                <option value="rdd" className="bg-slate-900">RDD2022 Multi-Damage (Cracks + Markings)</option>
+                <option value="rddGlobal" className="bg-slate-900">RDD2022 Global (Multi-Class Cracks)</option>
+                <option value="rdd" className="bg-slate-900">RDD2022 Japan (Legacy Fallback)</option>
                 <option value="obstacle" className="bg-slate-900">Road Obstacle & Debris (COCO)</option>
               </select>
             </div>
@@ -701,18 +702,18 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
                   </p>
                 </div>
               ) : result?.status === 'CLEAR' ? (
-                <div className="p-5 rounded-xl bg-slate-950 border border-emerald-500/40 text-slate-200 space-y-2.5">
+                <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-emerald-400 font-black text-sm sm:text-base tracking-wide font-mono">
+                    <div className="flex items-center gap-2 text-slate-300 font-black text-sm sm:text-base tracking-wide font-mono">
                       <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-                      <span>SUPPORTED HAZARDS: NONE DETECTED</span>
+                      <span>NO SUPPORTED HAZARD DETECTED</span>
                     </div>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 uppercase">
-                      SAFE (0/100)
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700 uppercase">
+                      NO HAZARDS (0/100)
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                    Inference completed successfully. No trained defect classes (potholes, cracks, surface degradation) were detected above the {Math.round(confThreshold * 100)}% threshold.
+                    Inference completed successfully. No trained defect classes (potholes, cracks, road obstacles) were detected above the {Math.round(confThreshold * 100)}% threshold.
                   </p>
                   <div className="text-[11px] text-slate-300 font-mono bg-slate-900/90 p-3 rounded-lg border border-slate-800 space-y-1">
                     <p className="text-amber-400 font-bold flex items-center gap-1">
@@ -720,7 +721,7 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
                       Model Scope Notice:
                     </p>
                     <p className="text-slate-400 font-sans text-[11px] leading-tight">
-                      Current AI models detect potholes and road-surface defects. Waterlogging, open manholes and other unsupported hazards require dedicated trained models.
+                      Current AI models detect potholes, cracks, and road obstacles. Waterlogging, open manholes and other unsupported hazards require dedicated trained models.
                     </p>
                   </div>
                 </div>

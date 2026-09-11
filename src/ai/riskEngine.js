@@ -228,12 +228,12 @@ export function calculateHazardRisk(detection) {
 export function calculateSceneRisk(detections) {
   if (!detections || detections.length === 0) {
     return {
-      overallRisk: 'SAFE',
+      overallRisk: 'NO SUPPORTED HAZARD DETECTED',
       riskScore: 0,
-      badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-      summary: 'Inference completed successfully. No supported hazards detected above configured confidence threshold.',
+      badgeClass: 'bg-slate-800 text-slate-300 border-slate-700',
+      summary: 'Inference completed successfully. No supported road hazards detected above configured confidence threshold.',
       priorityHazard: null,
-      maxSeverity: 'SAFE',
+      maxSeverity: 'UNCONFIRMED',
       evaluatedDetections: []
     };
   }

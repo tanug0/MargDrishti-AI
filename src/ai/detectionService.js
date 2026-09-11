@@ -70,24 +70,43 @@ export async function detectRoadHazards(imageSource, options = {}) {
       console.log(`[MargDrishti AI] Pothole Specialist found ${potholeDets.length} raw detections in ${tPotholeDuration.toFixed(1)}ms`);
       rawDetections.push(...potholeDets);
 
-      // 2. Run RDD Multi-Damage Detector (YOLO11n Japan Benchmark)
-      const rddModel = await modelManager.getModel('rdd');
-      modelsUsed.push(rddModel.info.name);
+      // 2. Run RDD Global Multi-Damage Detector (YOLOv8 Global Benchmark)
+      const rddGlobalModel = await modelManager.getModel('rddGlobal');
+      modelsUsed.push(rddGlobalModel.info.name);
 
       const tRddStart = performance.now();
-      const rddInputName = rddModel.session.inputNames?.[0] || 'images';
-      const rddOutputs = await rddModel.session.run({ [rddInputName]: tensor });
+      const rddInputName = rddGlobalModel.session.inputNames?.[0] || 'images';
+      const rddOutputs = await rddGlobalModel.session.run({ [rddInputName]: tensor });
       const tRddDuration = performance.now() - tRddStart;
 
-      const rddOutputName = rddModel.session.outputNames?.[0] || 'output0';
+      const rddOutputName = rddGlobalModel.session.outputNames?.[0] || 'output0';
       const rddTensor = rddOutputs[rddOutputName] || rddOutputs.output0 || rddOutputs[Object.keys(rddOutputs)[0]];
-      const rddDets = decodeModelOutput(rddTensor, rddModel.info, metadata, {
+      const rddDets = decodeModelOutput(rddTensor, rddGlobalModel.info, metadata, {
         confThreshold,
         nmsThreshold
       });
 
-      console.log(`[MargDrishti AI] RDD2022 Model found ${rddDets.length} raw detections in ${tRddDuration.toFixed(1)}ms`);
+      console.log(`[MargDrishti AI] RDD Global Model found ${rddDets.length} raw detections in ${tRddDuration.toFixed(1)}ms`);
       rawDetections.push(...rddDets);
+
+      // 3. Run Road Obstacle & Debris Detector (YOLOv8 COCO)
+      const obstacleModel = await modelManager.getModel('obstacle');
+      modelsUsed.push(obstacleModel.info.name);
+
+      const tObstacleStart = performance.now();
+      const obstacleInputName = obstacleModel.session.inputNames?.[0] || 'images';
+      const obstacleOutputs = await obstacleModel.session.run({ [obstacleInputName]: tensor });
+      const tObstacleDuration = performance.now() - tObstacleStart;
+
+      const obstacleOutputName = obstacleModel.session.outputNames?.[0] || 'output0';
+      const obstacleTensor = obstacleOutputs[obstacleOutputName] || obstacleOutputs.output0 || obstacleOutputs[Object.keys(obstacleOutputs)[0]];
+      const obstacleDets = decodeModelOutput(obstacleTensor, obstacleModel.info, metadata, {
+        confThreshold,
+        nmsThreshold
+      });
+
+      console.log(`[MargDrishti AI] Obstacle Detector found ${obstacleDets.length} raw detections in ${tObstacleDuration.toFixed(1)}ms`);
+      rawDetections.push(...obstacleDets);
 
       inferenceTime = Math.round(performance.now() - infStart);
     } else {
@@ -136,7 +155,7 @@ export async function detectRoadHazards(imageSource, options = {}) {
     const diagnostic = {
       modelsExecuted: modelsUsed,
       inputTensor: `[1, 3, 640, 640] Float32`,
-      outputTensor: modelChoice === 'pothole' ? '[1, 300, 6]' : (modelChoice === 'rdd' ? '[1, 10, 8400]' : (modelChoice === 'obstacle' ? '[1, 84, 8400]' : '[1, 300, 6] (Pothole) + [1, 10, 8400] (RDD)')),
+      outputTensor: modelChoice === 'pothole' ? '[1, 300, 6]' : (modelChoice === 'rdd' ? '[1, 10, 8400]' : (modelChoice === 'rddGlobal' ? '[1, 9, 8400]' : (modelChoice === 'obstacle' ? '[1, 84, 8400]' : '[1, 300, 6] (Pothole) + [1, 9, 8400] (RDD Global) + [1, 84, 8400] (Obstacle)'))),
       rawDetectionsCount: rawDetections.length,
       filteredDetectionsCount: filteredDetections.length,
       confidenceThreshold: `${Math.round(confThreshold * 100)}%`,

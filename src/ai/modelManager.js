@@ -25,9 +25,27 @@ export const MODEL_REGISTRY = {
     classes: ['Pothole'],
     description: 'High-precision real-time pothole detector with built-in NMS layer.'
   },
+  rddGlobal: {
+    id: 'rddGlobal',
+    name: 'MargDrishti RDD2022 Global Multi-Damage Detector',
+    path: '/models/rdd_global_crack_model.onnx',
+    size: '11.7 MB',
+    type: 'yolo_multiclass', // output: [1, 9, 8400]
+    inputName: 'images',
+    inputShape: [1, 3, 640, 640],
+    outputName: 'output0',
+    classes: [
+      'Alligator Crack',
+      'Transverse Crack',
+      'Longitudinal Crack',
+      'Other Corruption',
+      'Pothole'
+    ],
+    description: 'Trained on Global RDD2022 benchmark across diverse road surfaces and crack morphologies.'
+  },
   rdd: {
     id: 'rdd',
-    name: 'MargDrishti RDD2022 Multi-Damage Detector',
+    name: 'MargDrishti RDD2022 Multi-Damage Detector (Japan Subset)',
     path: '/models/rdd_model.onnx',
     size: '10.1 MB',
     type: 'yolo_multiclass', // output: [1, 10, 8400]
@@ -139,7 +157,8 @@ class ModelManager {
   async preloadModels() {
     try {
       await this.getModel('pothole');
-      this.getModel('rdd').catch(e => console.warn('Background RDD load note:', e));
+      this.getModel('rddGlobal').catch(e => console.warn('Background RDD Global load note:', e));
+      this.getModel('obstacle').catch(e => console.warn('Background Obstacle load note:', e));
     } catch (e) {
       console.warn('Initial model preload note:', e);
     }

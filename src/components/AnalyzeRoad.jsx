@@ -22,32 +22,38 @@ import {
   ShieldCheck,
   AlertOctagon,
   Volume2,
-  VolumeX
+  VolumeX,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { detectRoadHazards } from '../ai/detectionService';
 import { loadImageElement } from '../ai/preprocessor';
 import { getCurrentGPSPosition } from '../services/geoService';
 import { storageService } from '../services/storageService';
 
-const PRESET_SAMPLES = [
-  { id: 'pothole_deep', label: 'Deep Pothole (Urban)', url: '/sample_images/pothole_deep.jpg', expected: 'Pothole' },
-  { id: 'pothole_crater', label: 'Severe Pothole Crater', url: '/sample_images/pothole_crater.jpg', expected: 'Pothole' },
-  { id: 'pothole_1', label: 'Road Pit (Multi-Damage)', url: '/sample_images/pothole_1.jpg', expected: 'Pothole/Crack' },
-  { id: 'pothole_2', label: 'Dual Pothole Crater', url: '/sample_images/pothole_2.jpg', expected: 'Pothole' },
-  { id: 'cracked_asphalt', label: 'Cracked Asphalt', url: '/sample_images/cracked_asphalt.jpg', expected: 'Crack/Clear' },
-  { id: 'clean_highway', label: 'Clean Highway (Clear)', url: '/sample_images/clean_highway.jpg', expected: 'Clear' },
-  { id: 'clean_road', label: 'Clean Road (Clear)', url: '/sample_images/clean_road.jpg', expected: 'Clear' },
-  { id: 'suburban_road', label: 'Suburban Road (Clear)', url: '/sample_images/suburban_road.jpg', expected: 'Clear' }
+const SAMPLE_ANALYSES = [
+  { id: 'pothole_deep', label: 'Deep Pothole', url: '/sample_images/pothole_deep.jpg', desc: 'Urban road cavity' },
+  { id: 'pothole_crater', label: 'Severe Pothole', url: '/sample_images/pothole_crater.jpg', desc: 'Deep asphalt depression' },
+  { id: 'pothole_1', label: 'Road Pit', url: '/sample_images/pothole_1.jpg', desc: 'Surface cavity defect' },
+  { id: 'pothole_2', label: 'Dual Pothole', url: '/sample_images/pothole_2.jpg', desc: 'Multiple surface voids' },
+  { id: 'cracked_asphalt', label: 'Cracked Asphalt', url: '/sample_images/cracked_asphalt.jpg', desc: 'Surface road fatigue' },
+  { id: 'clean_highway', label: 'Clean Highway', url: '/sample_images/clean_highway.jpg', desc: 'Undamaged multi-lane road' },
+  { id: 'clean_road', label: 'Clean Road', url: '/sample_images/clean_road.jpg', desc: 'Clear asphalt roadway' },
+  { id: 'suburban_road', label: 'Suburban Road', url: '/sample_images/suburban_road.jpg', desc: 'Residential asphalt pavement' }
 ];
 
 export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
-  const [selectedImage, setSelectedImage] = useState(initialImage || PRESET_SAMPLES[0].url);
-  const [selectedImageName, setSelectedImageName] = useState(PRESET_SAMPLES[0].label);
-  const [selectedImageMeta, setSelectedImageMeta] = useState({ size: 'Sample', dimensions: 'Loading...' });
+  // Clean empty initial state (no preloaded image, no automatic inference)
+  const [selectedImage, setSelectedImage] = useState(initialImage || null);
+  const [selectedImageName, setSelectedImageName] = useState(initialImage ? 'Selected Road Image' : '');
+  const [selectedImageMeta, setSelectedImageMeta] = useState({ size: '', dimensions: '' });
   const [imageLoaded, setImageLoaded] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
+
+  // Optional Sample Analysis Drawer (collapsed by default)
+  const [showSampleSection, setShowSampleSection] = useState(false);
 
   // Settings
   const [selectedModel, setSelectedModel] = useState('unified');
@@ -70,6 +76,11 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
   useEffect(() => {
     if (!selectedImage) {
       setImageLoaded(false);
+      imageObjRef.current = null;
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
       return;
     }
 
@@ -108,13 +119,6 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
     }
   }, [result, hoveredBoxIndex]);
 
-  // Initial load auto-evaluates default benchmark
-  useEffect(() => {
-    if (selectedImage && !result && !isAnalyzing) {
-      handleAnalyze(selectedImage);
-    }
-  }, []);
-
   const handleFileSelection = (file) => {
     if (!file) {
       return;
@@ -123,7 +127,7 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
     // Validate image format
     const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'];
     if (file.type && !validTypes.includes(file.type.toLowerCase()) && !file.type.startsWith('image/')) {
-      setErrorMessage('Invalid image. Please select a JPG, PNG or WEBP image.');
+      setErrorMessage('Invalid image format. Please select a JPG, PNG or WEBP image.');
       return;
     }
 
@@ -137,20 +141,42 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
 
       setSelectedImage(objectUrl);
       setSelectedImageName(file.name || 'Uploaded Road Image');
-      setSelectedImageMeta({ size: sizeStr, dimensions: 'Calculating...' });
+      setSelectedImageMeta({ size: sizeStr, dimensions: 'Loading...' });
+
+      // Automatically run real ONNX analysis upon user upload
+      handleAnalyze(objectUrl);
     } catch (e) {
       console.error('File read error:', e);
       setErrorMessage('Failed to read image file. Please try another file.');
     }
   };
 
-  const handleSelectPreset = (preset) => {
+  const handleSelectSample = (sample) => {
     setErrorMessage(null);
     setResult(null);
     setSaveSuccess(false);
-    setSelectedImageName(preset.label);
-    setSelectedImageMeta({ size: 'Preset Benchmark', dimensions: 'Loading...' });
-    setSelectedImage(preset.url);
+    setSelectedImageName(sample.label);
+    setSelectedImageMeta({ size: 'Sample Image', dimensions: 'Loading...' });
+    setSelectedImage(sample.url);
+
+    // Run the SAME REAL ONNX pipeline on the chosen sample
+    handleAnalyze(sample.url);
+  };
+
+  const handleClearImage = () => {
+    setSelectedImage(null);
+    setSelectedImageName('');
+    setSelectedImageMeta({ size: '', dimensions: '' });
+    setImageLoaded(false);
+    setResult(null);
+    setErrorMessage(null);
+    setSaveSuccess(false);
+    setGpsStatus(null);
+    imageObjRef.current = null;
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
   };
 
   const handleAnalyze = async (imageSrc) => {
@@ -401,14 +427,14 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
           <div>
             <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2.5 uppercase font-mono">
               <Scan className="w-6 h-6 text-brand-400" />
-              Road Hazard Analysis
+              Analyze Road
             </h1>
             <p className="text-sm text-slate-400 mt-1 font-sans">
-              High-resolution road image inspection with real-time ONNX Runtime neural decoding and deterministic risk scoring.
+              Upload a road image to detect supported road hazards.
             </p>
           </div>
 
-          {/* Controls: Model, Voice Alert & Diagnostics */}
+          {/* Controls: Model, Voice Alert, Diagnostics & Reset */}
           <div className="flex flex-wrap items-center gap-2.5">
             <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono">
               <Cpu className="w-3.5 h-3.5 text-brand-400" />
@@ -459,38 +485,69 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
               <Info className="w-3.5 h-3.5" />
               <span>Diagnostics</span>
             </button>
+
+            {selectedImage && (
+              <button
+                onClick={handleClearImage}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-mono bg-slate-950 text-slate-400 border-slate-800 hover:text-rose-400 hover:border-rose-500/40 transition-colors"
+                title="Clear image and reset"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Preset Sample Gallery */}
-        <div className="pt-4 border-t border-slate-800/80">
-          <p className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-bold mb-2.5 flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-amber-400" />
-            Verified Test Benchmarks (1-Click Evaluation):
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-            {PRESET_SAMPLES.map((sample) => (
-              <button
-                key={sample.id}
-                onClick={() => handleSelectPreset(sample)}
-                className={`flex items-center gap-2 p-2 rounded-xl border text-left text-xs transition-all ${
-                  selectedImageName === sample.label
-                    ? 'bg-brand-600/25 border-brand-500 text-white shadow-sm shadow-brand-500/20'
-                    : 'bg-slate-950/60 border-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-                }`}
-              >
-                <img 
-                  src={sample.url} 
-                  alt={sample.label} 
-                  className="w-8 h-8 rounded-lg object-cover border border-slate-700 flex-shrink-0" 
-                />
-                <div className="min-w-0 flex-1 font-mono">
-                  <p className="font-medium truncate text-[11px] leading-tight">{sample.label}</p>
-                  <p className="text-[10px] text-slate-500">{sample.expected}</p>
-                </div>
-              </button>
-            ))}
-          </div>
+        {/* Optional "Try a Sample Analysis" Drawer (Collapsed by Default) */}
+        <div className="pt-3 border-t border-slate-800/80">
+          <button
+            onClick={() => setShowSampleSection(!showSampleSection)}
+            className="flex items-center justify-between w-full p-2.5 sm:p-3 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:bg-slate-850 hover:border-slate-700 text-xs font-mono transition-all text-slate-300 group"
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-brand-400 group-hover:scale-110 transition-transform" />
+              <span className="font-bold text-slate-200">Try a Sample Analysis</span>
+              <span className="hidden sm:inline text-slate-500 text-[11px]">— Evaluate pre-loaded road conditions</span>
+            </div>
+            <div className="flex items-center gap-1 text-slate-400">
+              <span className="text-[11px]">{showSampleSection ? 'Hide Samples' : 'Show Samples'}</span>
+              {showSampleSection ? (
+                <ChevronUp className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+            </div>
+          </button>
+
+          {/* Collapsible Sample Cards Grid */}
+          {showSampleSection && (
+            <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
+              {SAMPLE_ANALYSES.map((sample) => (
+                <button
+                  key={sample.id}
+                  onClick={() => handleSelectSample(sample)}
+                  className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
+                    selectedImageName === sample.label
+                      ? 'bg-brand-600/25 border-brand-500 text-white shadow-sm shadow-brand-500/20'
+                      : 'bg-slate-950/70 border-slate-800/90 text-slate-400 hover:text-slate-200 hover:bg-slate-900 hover:border-slate-700'
+                  }`}
+                >
+                  <img 
+                    src={sample.url} 
+                    alt={sample.label} 
+                    className="w-full h-12 rounded-lg object-cover border border-slate-800 mb-1.5" 
+                  />
+                  <p className="font-mono font-bold truncate text-[11px] leading-tight text-slate-200 w-full">
+                    {sample.label}
+                  </p>
+                  <p className="text-[9px] text-slate-500 truncate w-full font-sans">
+                    {sample.desc}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -508,10 +565,46 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
           {/* Canvas Viewport */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl relative">
             <div className="relative bg-slate-950 min-h-[400px] max-h-[560px] flex items-center justify-center overflow-hidden">
+              {/* Canvas rendered when an image is loaded */}
               <canvas
                 ref={canvasRef}
-                className="max-h-[540px] w-auto max-w-full object-contain cursor-crosshair"
+                className={`max-h-[540px] w-auto max-w-full object-contain cursor-crosshair ${
+                  selectedImage ? 'block' : 'hidden'
+                }`}
               />
+
+              {/* Clean Empty State Placeholder when no image is selected */}
+              {!selectedImage && (
+                <div className="text-center py-16 px-6 space-y-4 font-mono">
+                  <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-brand-400 shadow-inner">
+                    <UploadCloud className="w-8 h-8 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white uppercase tracking-wider">
+                      No Road Image Selected
+                    </h3>
+                    <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 font-sans">
+                      Upload a road photo or select a sample analysis to execute real-time neural hazard detection.
+                    </p>
+                  </div>
+                  <div className="pt-2 flex flex-wrap items-center justify-center gap-2.5">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs uppercase tracking-wider font-mono transition-all shadow-lg shadow-brand-500/25 active:scale-95"
+                    >
+                      <UploadCloud className="w-4 h-4" />
+                      <span>Upload Road Image</span>
+                    </button>
+                    <button
+                      onClick={() => setShowSampleSection(true)}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold text-xs uppercase tracking-wider font-mono border border-slate-800 transition-colors"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-brand-400" />
+                      <span>Try Sample</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Scanning Radar Animation during inference */}
               {isAnalyzing && (
@@ -526,40 +619,51 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
             </div>
 
             {/* Canvas Toolbar Footer */}
-            <div className="p-3.5 bg-slate-900 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs font-mono text-slate-400">
-              <div className="flex items-center gap-2 min-w-0">
-                <FileImage className="w-4 h-4 text-brand-400 flex-shrink-0" />
-                <span className="truncate text-slate-200 font-bold">{selectedImageName}</span>
-                <span className="text-slate-500 text-[11px]">
-                  ({selectedImageMeta.dimensions} • {selectedImageMeta.size})
-                </span>
-              </div>
+            {selectedImage && (
+              <div className="p-3.5 bg-slate-900 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs font-mono text-slate-400">
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileImage className="w-4 h-4 text-brand-400 flex-shrink-0" />
+                  <span className="truncate text-slate-200 font-bold">{selectedImageName}</span>
+                  <span className="text-slate-500 text-[11px]">
+                    ({selectedImageMeta.dimensions} {selectedImageMeta.size ? `• ${selectedImageMeta.size}` : ''})
+                  </span>
+                </div>
 
-              {/* Primary Analyze Road Trigger */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleAnalyze(selectedImage)}
-                  disabled={isAnalyzing || !selectedImage}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition-all font-mono shadow-md ${
-                    isAnalyzing
-                      ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
-                      : 'bg-brand-600 hover:bg-brand-500 text-white shadow-brand-500/25 active:scale-95'
-                  }`}
-                >
-                  {isAnalyzing ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>AI ANALYZING...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Scan className="w-3.5 h-3.5" />
-                      <span>ANALYZE ROAD</span>
-                    </>
-                  )}
-                </button>
+                {/* Action Buttons: Re-Analyze & Clear */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleAnalyze(selectedImage)}
+                    disabled={isAnalyzing}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition-all font-mono shadow-md ${
+                      isAnalyzing
+                        ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
+                        : 'bg-brand-600 hover:bg-brand-500 text-white shadow-brand-500/25 active:scale-95'
+                    }`}
+                  >
+                    {isAnalyzing ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>AI ANALYZING...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Scan className="w-3.5 h-3.5" />
+                        <span>ANALYZE ROAD</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={handleClearImage}
+                    disabled={isAnalyzing}
+                    className="p-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition-colors"
+                    title="Clear Image"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* Drag & Drop Upload Zone */}
@@ -631,7 +735,7 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
 
           {/* Detections Pill Selector */}
           {result?.detections && result.detections.length > 0 && (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2.5">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2.5 animate-in fade-in">
               <p className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold flex items-center justify-between">
                 <span>Identified Road Hazards ({result.detections.length})</span>
                 <span className="text-slate-500 font-normal">Hover to highlight</span>
@@ -757,19 +861,44 @@ export default function AnalyzeRoad({ onHazardSaved, initialImage = null }) {
                     RETRY INFERENCE
                   </button>
                 </div>
-              ) : (
+              ) : selectedImage ? (
                 <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 text-slate-400 font-mono text-xs space-y-2 text-center">
                   <FileCheck2 className="w-8 h-8 text-brand-400 mx-auto" />
-                  <p className="font-bold text-white uppercase">IMAGE SELECTED</p>
+                  <p className="font-bold text-white uppercase">IMAGE LOADED</p>
                   <p className="text-[11px] text-slate-400 font-sans">
                     Click "ANALYZE ROAD" to execute neural road defect detection.
                   </p>
                   <button
                     onClick={() => handleAnalyze(selectedImage)}
-                    className="mt-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs font-mono uppercase"
+                    className="mt-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs font-mono uppercase shadow-md shadow-brand-500/20"
                   >
                     ANALYZE ROAD
                   </button>
+                </div>
+              ) : (
+                /* Clean Empty Standby State */
+                <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 text-slate-400 font-mono text-xs space-y-3">
+                  <div className="flex items-center gap-2 text-brand-400 font-bold text-sm">
+                    <Sparkles className="w-4 h-4" />
+                    <span>READY FOR ANALYSIS</span>
+                  </div>
+                  <p className="text-slate-300 font-sans text-xs leading-relaxed">
+                    Upload a road surface photo or select a sample analysis to detect road defects in real time using client-side ONNX Runtime WASM.
+                  </p>
+                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px] text-slate-400 font-mono">
+                    <div className="flex items-center gap-1.5 text-emerald-400">
+                      <Check className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>Potholes & Cavities (Specialist YOLOv8)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-amber-400">
+                      <Check className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>Longitudinal & Transverse Cracks (RDD Global)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-yellow-400">
+                      <Check className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>Road Obstacles & Debris (COCO)</span>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

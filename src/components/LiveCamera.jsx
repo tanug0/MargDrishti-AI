@@ -24,6 +24,7 @@ import {
   Info
 } from 'lucide-react';
 import { detectRoadHazards } from '../ai/detectionService';
+import { calculateSceneRisk } from '../ai/riskEngine';
 import { getCurrentGPSPosition } from '../services/geoService';
 import { storageService } from '../services/storageService';
 

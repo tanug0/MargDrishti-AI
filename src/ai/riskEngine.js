@@ -147,6 +147,16 @@ export function calculateHazardRisk(detection) {
     }
   }
 
+  // Rule 3: Any detection with confidence below 50% MUST NOT be High or Critical (cap at max 55 Medium)
+  if (confPct < 50) {
+    rawScore = Math.min(rawScore, 55); // Capped at MEDIUM
+  }
+
+  // Rule 4: Very weak detection below 35% confidence is capped at LOW (max 35)
+  if (confPct < 35) {
+    rawScore = Math.min(rawScore, 35); // Capped at LOW
+  }
+
   // Clamp to valid 0–100 range
   const numericScore = Math.min(100, Math.max(0, Math.round(rawScore)));
 
@@ -265,7 +275,11 @@ export function calculateSceneRisk(detections) {
   }
 
   // Apply bonus only if there are genuine multiple hazards
-  const finalSceneScore = Math.min(100, maxScore + multiHazardBonus);
+  let sceneScore = maxScore + multiHazardBonus;
+  if (priorityHazard && priorityHazard.confidencePct < 50) {
+    sceneScore = Math.min(sceneScore, 59);
+  }
+  const finalSceneScore = Math.min(100, Math.max(0, sceneScore));
 
   // Overall Severity Thresholds:
   // 0–24   = SAFE

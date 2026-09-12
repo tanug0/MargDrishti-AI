@@ -53,7 +53,7 @@ export default function LiveCamera({ onHazardSaved }) {
   // Selected Hazard for manual focus
   const [lastCapturedDataUrl, setLastCapturedDataUrl] = useState(null);
 
-  // Refs for loop control and cleanup
+  // Refs for loop control, temporal confirmation, and cleanup
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const overlayCanvasRef = useRef(null);
@@ -61,6 +61,11 @@ export default function LiveCamera({ onHazardSaved }) {
   const isInferencingRef = useRef(false);
   const isStreamingRef = useRef(false);
   const lastSpokenRef = useRef({ key: '', time: 0 });
+  const temporalTrackerRef = useRef({
+    consecutiveCount: 0,
+    lastHazardClass: null,
+    lastConfirmedHazard: null
+  });
 
   // Keep streaming ref synchronized
   useEffect(() => {
@@ -114,6 +119,11 @@ export default function LiveCamera({ onHazardSaved }) {
     setCameraError(null);
     setLatestResult(null);
     setSaveSuccess(false);
+    temporalTrackerRef.current = {
+      consecutiveCount: 0,
+      lastHazardClass: null,
+      lastConfirmedHazard: null
+    };
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCameraError('Your browser does not support camera access via getUserMedia.');
@@ -196,10 +206,17 @@ export default function LiveCamera({ onHazardSaved }) {
       window.speechSynthesis.cancel();
     }
 
+    temporalTrackerRef.current = {
+      consecutiveCount: 0,
+      lastHazardClass: null,
+      lastConfirmedHazard: null
+    };
+
     setIsStreaming(false);
     isStreamingRef.current = false;
     isInferencingRef.current = false;
     setIsAnalyzing(false);
+    setLatestResult(null);
   };
 
   /**
@@ -267,26 +284,111 @@ export default function LiveCamera({ onHazardSaved }) {
 
       if (!isStreamingRef.current) return; // Discard if user stopped camera during inference
 
-      setLatestResult(res);
+      // --- LIVE CAMERA RELIABILITY & TEMPORAL STABILITY FILTER ---
+      // 1. Filter out sub-pixel camera flutter, noise specs, and weak detections
+      const validDetections = (res.detections || []).filter(det => {
+        const areaPct = (det.bboxNormalized.width * det.bboxNormalized.height) * 100;
+        const hClass = (det.hazardClass || '').toLowerCase();
+
+        // Reject tiny camera flutter / speckle noise with low confidence
+        if (areaPct < 0.30 && det.confidence < 0.55) {
+          return false;
+        }
+
+        // Specific live camera confidence gates
+        if (hClass === 'pothole') {
+          return det.confidence >= 0.32;
+        } else if (hClass.includes('crack') || hClass === 'obstacle') {
+          return det.confidence >= 0.35;
+        }
+        return det.confidence >= 0.30;
+      });
+
+      let finalStatus = 'CLEAR';
+      let finalSceneRisk = null;
+      let finalDetections = [];
+
+      if (validDetections.length === 0) {
+        // No valid live hazards in this frame: reset temporal tracker
+        temporalTrackerRef.current = {
+          consecutiveCount: 0,
+          lastHazardClass: null,
+          lastConfirmedHazard: null
+        };
+        finalStatus = 'CLEAR';
+        finalSceneRisk = calculateSceneRisk([]);
+        finalDetections = [];
+      } else {
+        const liveSceneRisk = calculateSceneRisk(validDetections);
+        const priority = liveSceneRisk.priorityHazard || validDetections[0];
+        const pAreaPct = (priority.bboxNormalized.width * priority.bboxNormalized.height) * 100;
+
+        // High evidence condition: >= 70% confidence OR (>= 55% conf with significant footprint >= 1.2%)
+        const isHighEvidence = (priority.confidence >= 0.70) || (priority.confidence >= 0.55 && pAreaPct >= 1.2);
+
+        let isConfirmed = false;
+        if (isHighEvidence) {
+          // Immediately confirmed on high evidence
+          temporalTrackerRef.current.consecutiveCount = Math.max(2, temporalTrackerRef.current.consecutiveCount + 1);
+          temporalTrackerRef.current.lastHazardClass = priority.hazardClass;
+          temporalTrackerRef.current.lastConfirmedHazard = priority;
+          isConfirmed = true;
+        } else {
+          // Moderate evidence: requires >= 2 consecutive cycles of same hazard class
+          if (temporalTrackerRef.current.lastHazardClass === priority.hazardClass) {
+            temporalTrackerRef.current.consecutiveCount += 1;
+          } else {
+            temporalTrackerRef.current.lastHazardClass = priority.hazardClass;
+            temporalTrackerRef.current.consecutiveCount = 1;
+          }
+
+          if (temporalTrackerRef.current.consecutiveCount >= 2) {
+            isConfirmed = true;
+            temporalTrackerRef.current.lastConfirmedHazard = priority;
+          } else {
+            isConfirmed = false;
+          }
+        }
+
+        if (isConfirmed) {
+          finalStatus = 'DETECTED';
+          finalDetections = liveSceneRisk.evaluatedDetections || validDetections;
+          finalSceneRisk = liveSceneRisk;
+
+          // Trigger Voice Alert (cooldown handled inside function)
+          triggerVoiceWarning(priority.type, priority.risk?.level || liveSceneRisk.overallRisk);
+
+          // Cache snapshot for GPS tagging
+          try {
+            setLastCapturedDataUrl(snapCanvas.toDataURL('image/jpeg', 0.7));
+          } catch (e) {}
+        } else {
+          // Unconfirmed single-frame moderate signal: monitor without alarm
+          finalStatus = 'UNCERTAIN';
+          finalDetections = [];
+          finalSceneRisk = {
+            ...liveSceneRisk,
+            overallRisk: 'MONITORING',
+            summary: `Signal detected for ${priority.type} (${priority.confidencePct}%); awaiting temporal confirmation.`
+          };
+        }
+      }
+
+      const frameResult = {
+        status: finalStatus,
+        detections: finalDetections,
+        inferenceTime: res.inferenceTime || 0,
+        sceneRisk: finalSceneRisk,
+        imageMetadata: res.imageMetadata || { origW: targetW, origH: targetH },
+        error: null
+      };
+
+      setLatestResult(frameResult);
       setInferenceStats(prev => ({
         totalFramesAnalyzed: prev.totalFramesAnalyzed + 1,
         lastInferenceMs: res.inferenceTime || 0,
-        hazardsDetectedInSession: prev.hazardsDetectedInSession + (res.status === 'DETECTED' ? res.detections.length : 0)
+        hazardsDetectedInSession: prev.hazardsDetectedInSession + (finalStatus === 'DETECTED' ? finalDetections.length : 0)
       }));
-
-      // Render bounding boxes on overlay canvas
-      renderOverlayCanvas(res.detections, targetW, targetH);
-
-      // Trigger Voice Alert & Cache Snapshot if Hazard Detected
-      if (res.status === 'DETECTED' && res.detections.length > 0) {
-        const priority = res.sceneRisk?.priorityHazard || res.detections[0];
-        triggerVoiceWarning(priority.type, priority.risk?.level || 'HIGH');
-
-        // Cache last detected frame data URL for quick GPS tagging
-        try {
-          setLastCapturedDataUrl(snapCanvas.toDataURL('image/jpeg', 0.7));
-        } catch (e) {}
-      }
 
     } catch (err) {
       console.error('[MargDrishti AI Live] Frame analysis error:', err);
@@ -294,13 +396,9 @@ export default function LiveCamera({ onHazardSaved }) {
         status: 'ERROR',
         detections: [],
         inferenceTime: 0,
+        sceneRisk: null,
         error: err.message || 'Frame inference error.'
       });
-      // Clear overlay on error
-      if (overlayCanvasRef.current) {
-        const ctx = overlayCanvasRef.current.getContext('2d');
-        ctx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
-      }
     } finally {
       isInferencingRef.current = false;
       setIsAnalyzing(false);
@@ -396,6 +494,21 @@ export default function LiveCamera({ onHazardSaved }) {
       ctx.fillText(labelText, bbox.x + 8, labelY + 16);
     });
   };
+
+  // Synchronize overlay canvas with latestResult and videoDimensions
+  useEffect(() => {
+    if (!isStreaming || !latestResult || latestResult.status !== 'DETECTED' || !latestResult.detections?.length) {
+      if (overlayCanvasRef.current) {
+        const ctx = overlayCanvasRef.current.getContext('2d');
+        ctx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
+      }
+      return;
+    }
+
+    const frameW = latestResult.imageMetadata?.origW || videoDimensions.width || 1280;
+    const frameH = latestResult.imageMetadata?.origH || videoDimensions.height || 720;
+    renderOverlayCanvas(latestResult.detections, frameW, frameH);
+  }, [latestResult, isStreaming, videoDimensions]);
 
   /**
    * Save detected hazard with real GPS
@@ -580,7 +693,7 @@ export default function LiveCamera({ onHazardSaved }) {
                         <span>⚠ ROAD HAZARD AHEAD</span>
                       </div>
                       <p className="text-xs sm:text-sm font-black text-white font-mono uppercase">
-                        {latestResult.sceneRisk.priorityHazard.type} • {latestResult.sceneRisk.priorityHazard.confidencePct}% CONFIDENCE • {latestResult.sceneRisk.overallRisk} RISK
+                        {latestResult.sceneRisk.priorityHazard.type} • {latestResult.sceneRisk.priorityHazard.confidencePct}% CONFIDENCE • {latestResult.sceneRisk.priorityHazard.risk?.level || latestResult.sceneRisk.overallRisk} RISK
                       </p>
                     </div>
                   )}
@@ -658,7 +771,7 @@ export default function LiveCamera({ onHazardSaved }) {
                     ⚠ HAZARD DETECTED
                   </span>
                   <span className="text-[10px] px-2 py-0.5 rounded bg-red-500/20 text-red-300 font-bold uppercase">
-                    {latestResult.sceneRisk?.overallRisk} RISK
+                    {latestResult.sceneRisk?.priorityHazard?.risk?.level || latestResult.sceneRisk?.overallRisk} RISK
                   </span>
                 </div>
                 <p className="text-xs text-red-100 font-sans">
